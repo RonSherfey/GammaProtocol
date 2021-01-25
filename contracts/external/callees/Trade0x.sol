@@ -68,34 +68,17 @@ contract Trade0x is CalleeInterface {
             address trader,
             IZeroXExchange.Order[] memory order,
             uint256[] memory takerAssetFillAmount,
-            bytes[] memory signature,
-            uint256[] memory deadlines,
-            uint8[] memory v,
-            bytes32[] memory r,
-            bytes32[] memory s
-        ) = abi.decode(
-            _data,
-            (address, IZeroXExchange.Order[], uint256[], bytes[], uint256[], uint8[], bytes32[], bytes32[])
-        );
+            bytes[] memory signature
+        ) = abi.decode(_data, (address, IZeroXExchange.Order[], uint256[], bytes[]));
 
-        require(
-            tx.origin == trader,
-            "Trade0x: funds can only be transferred in from the person sending the transaction"
-        );
+        // require(
+        //     tx.origin == trader,
+        //     "Trade0x: funds can only be transferred in from the person sending the transaction"
+        // );
 
         for (uint256 i = 0; i < order.length; i++) {
             address takerAsset = decodeERC20Asset(order[i].takerAssetData);
             // pull token from user
-            ERC20PermitUpgradeable(takerAsset).permit(
-                trader,
-                address(this),
-                takerAssetFillAmount[i],
-                deadlines[i],
-                v[i],
-                r[i],
-                s[i]
-            );
-
             ERC20Interface(takerAsset).safeTransferFrom(trader, address(this), takerAssetFillAmount[i]);
             // approve the 0x ERC20 Proxy to move fund
             ERC20Interface(takerAsset).safeIncreaseAllowance(assetProxy, takerAssetFillAmount[i]);

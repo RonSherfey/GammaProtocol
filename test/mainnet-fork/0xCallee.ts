@@ -88,6 +88,7 @@ contract('Callee contract test', async ([deployer, user, controller, payabeProxy
     it("call the callee address with user's address as sender (direct test) ", async () => {
       const data = web3.eth.abi.encodeParameters(
         [
+          'address',
           {
             'Order[]': {
               makerAddress: 'address',
@@ -110,9 +111,8 @@ contract('Callee contract test', async ([deployer, user, controller, payabeProxy
           },
           'uint256[]',
           'bytes[]',
-          'address',
         ],
-        [[order1], [fillAmount1.toString()], [signature1], payabeProxy],
+        [user, [order1], [fillAmount1.toString()], [signature1]],
       )
 
       const usdcBalanceBefore = new BigNumber(await usdc.balanceOf(user))
@@ -125,8 +125,8 @@ contract('Callee contract test', async ([deployer, user, controller, payabeProxy
       const feeAmount = new BigNumber(gasPriceWei).times(70000).toString()
 
       // payabeProxy need to approve callee to pull weth
-      await weth.deposit({from: payabeProxy, value: feeAmount})
-      await weth.approve(callee.address, feeAmount, {from: payabeProxy})
+      await weth.deposit({from: user, value: feeAmount})
+      await weth.approve(callee.address, feeAmount, {from: user})
 
       await callee.callFunction(user, data, {
         from: controller,
