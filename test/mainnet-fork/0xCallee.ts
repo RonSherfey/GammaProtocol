@@ -7,6 +7,9 @@ import {
   MockERC20Instance,
   WETH9Instance,
   IZeroXExchangeInstance,
+  PayableProxyControllerInstance,
+  ControllerInstance,
+  MockControllerInstance,
 } from '../../build/types/truffle-types'
 
 import {createTokenAmount} from '../utils'
@@ -15,6 +18,9 @@ const TradeCallee = artifacts.require('Trade0x')
 const ERC20 = artifacts.require('MockERC20')
 const WETH9 = artifacts.require('WETH9')
 const Exchange = artifacts.require('IZeroXExchange')
+const Controller = artifacts.require('Controller.sol')
+const PayableProxyController = artifacts.require('PayableProxyController.sol')
+const MockController = artifacts.require('MockController.sol')
 
 // unlock this address to get its USDC
 const usdcWhale = '0xBE0eB53F46cd790Cd13851d5EFf43D12404d33E8'
@@ -24,9 +30,11 @@ const EXCHANGE_ADDR = '0x61935cbdd02287b511119ddb11aeb42f1593b7ef'
 const ERC20PROXY_ADDR = '0x95e6f48254609a6ee006f7d493c8e5fb97094cef'
 const STAKING_ADDR = '0xa26e80e7Dea86279c6d778D702Cc413E6CFfA777'
 const USDCAddress = '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48'
-const CTokenAddress = '0x39aa39c021dfbae8fac545936693ac917d5e7563'
 const WETHAddress = '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2'
 const oTokenAddress = '0x8018AF0f74E3Eb4aBD32c523398524B404C3Ae74'
+const payableProxyAddress = '0x8f7Dd610c457FC7Cb26B0f9Db4e77581f94F70aC'
+const controllerProxyAddress = '0x4ccc2339F87F6c59c6893E1A678c2266cA58dC72'
+const ZERO_ADDR = '0x0000000000000000000000000000000000000000'
 
 // the maker's address
 const maker = '0x75ea4d5a32370f974d40b404e4ce0e00c1554979'
@@ -52,17 +60,34 @@ const order1 = {
 const signature1 =
   '0x1b83ae7e3dae7d335bac2e1594bc517f797d18cc0ddb67518f39cd422e0153d1ad21e8ddf039f9b04d4581fa1530e1a0b6f89eabce6f91c295ab5c46b75333ee9902'
 
-contract('Callee contract test', async ([deployer, user, controller, payabeProxy]) => {
+enum ActionType {
+  OpenVault,
+  MintShortOption,
+  BurnShortOption,
+  DepositLongOption,
+  WithdrawLongOption,
+  DepositCollateral,
+  WithdrawCollateral,
+  SettleVault,
+  Redeem,
+  Call,
+}
+
+contract('Callee contract test', async ([deployer, user, controller]) => {
   let callee: Trade0xInstance
   let exchange: IZeroXExchangeInstance
   let usdc: MockERC20Instance
   let weth: WETH9Instance
   let otoken: MockERC20Instance
+  let controllerProxy: ControllerInstance
+  let payableProxyController: PayableProxyControllerInstance
+  let mockController: MockControllerInstance
 
   before('setup transfer account asset', async () => {
     // setup contracts
     exchange = await Exchange.at(EXCHANGE_ADDR)
-    callee = await TradeCallee.new(EXCHANGE_ADDR, ERC20PROXY_ADDR, WETHAddress, STAKING_ADDR, controller, {
+    mockController = await MockController.new()
+    callee = await TradeCallee.new(EXCHANGE_ADDR, ERC20PROXY_ADDR, WETHAddress, STAKING_ADDR, controllerProxyAddress, {
       from: deployer,
     })
 
@@ -73,6 +98,8 @@ contract('Callee contract test', async ([deployer, user, controller, payabeProxy
 
     weth = await WETH9.at(WETHAddress)
 
+    payableProxyController = await PayableProxyController.at(payableProxyAddress)
+
     // get 20000 USDC from the whale ;)
     await usdc.transfer(user, createTokenAmount(20000, 6), {from: usdcWhale})
     // user need to approve callee function
@@ -82,6 +109,11 @@ contract('Callee contract test', async ([deployer, user, controller, payabeProxy
 
     const makerAllowance = await otoken.allowance(maker, ERC20PROXY_ADDR)
     assert.isTrue(makerAllowance.gte('200000000'))
+
+    controllerProxy = await Controller.at(controllerProxyAddress)
+    const ownerAddress = '0x638E5DA0EEbbA58c67567bcEb4Ab2dc8D34853FB'
+    await web3.eth.sendTransaction({from: deployer, to: ownerAddress, value: 2000000000000000000})
+    await controllerProxy.setCallRestriction(false, {from: ownerAddress})
   })
 
   describe('test a simple sell trade', async () => {
@@ -118,6 +150,19 @@ contract('Callee contract test', async ([deployer, user, controller, payabeProxy
       const usdcBalanceBefore = new BigNumber(await usdc.balanceOf(user))
       const oTokenBalanceBefore = new BigNumber(await otoken.balanceOf(user))
 
+      const actionArgs = [
+        {
+          actionType: ActionType.Call,
+          owner: user,
+          secondAddress: callee.address,
+          asset: ZERO_ADDR,
+          vaultId: '1',
+          amount: '0',
+          index: '0',
+          data: data,
+        },
+      ]
+
       // pay protocol fee in ETH.
       const gasPriceGWei = '50'
       const gasPriceWei = web3.utils.toWei(gasPriceGWei, 'gwei')
@@ -128,10 +173,7 @@ contract('Callee contract test', async ([deployer, user, controller, payabeProxy
       await weth.deposit({from: user, value: feeAmount})
       await weth.approve(callee.address, feeAmount, {from: user})
 
-      await callee.callFunction(user, data, {
-        from: controller,
-        gasPrice: gasPriceWei,
-      })
+      await payableProxyController.operate(actionArgs, user, {from: user, value: feeAmount, gasPrice: gasPriceWei})
 
       const usdcBalanceAfter = new BigNumber(await usdc.balanceOf(user))
       assert.equal(usdcBalanceBefore.minus(usdcBalanceAfter).toString(), fillAmount1.toString())
